@@ -1169,6 +1169,7 @@ func (s *Server) installKubeQuotaController(
 	if err != nil {
 		return err
 	}
+	
 
 	// TODO(ncdc): should we make these configurable?
 	const (
@@ -1176,7 +1177,7 @@ func (s *Server) installKubeQuotaController(
 		replenishmentPeriod      = 12 * time.Hour
 		workersPerLogicalCluster = 1
 	)
-
+	
 	c, err := kubequota.NewController(
 		s.KcpSharedInformerFactory.Core().V1alpha1().LogicalClusters(),
 		kubeClusterClient,

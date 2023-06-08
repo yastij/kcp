@@ -21,6 +21,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"github.com/kcp-dev/kcp/pkg/reconciler/kubequota"
 	"net/http"
 	"net/http/httputil"
 	_ "net/http/pprof"
@@ -31,24 +32,6 @@ import (
 	kcpkubernetesinformers "github.com/kcp-dev/client-go/informers"
 	kcpkubernetesclientset "github.com/kcp-dev/client-go/kubernetes"
 	"github.com/kcp-dev/logicalcluster/v3"
-
-	apiextensionsapiserver "k8s.io/apiextensions-apiserver/pkg/apiserver"
-	kcpapiextensionsclientset "k8s.io/apiextensions-apiserver/pkg/client/kcp/clientset/versioned"
-	kcpapiextensionsinformers "k8s.io/apiextensions-apiserver/pkg/client/kcp/informers/externalversions"
-	"k8s.io/apimachinery/pkg/util/sets"
-	"k8s.io/apiserver/pkg/admission"
-	"k8s.io/apiserver/pkg/endpoints/filters"
-	"k8s.io/apiserver/pkg/informerfactoryhack"
-	"k8s.io/apiserver/pkg/quota/v1/generic"
-	genericapiserver "k8s.io/apiserver/pkg/server"
-	serverstorage "k8s.io/apiserver/pkg/server/storage"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/kubernetes/pkg/genericcontrolplane"
-	"k8s.io/kubernetes/pkg/genericcontrolplane/aggregator"
-	"k8s.io/kubernetes/pkg/genericcontrolplane/apis"
-	quotainstall "k8s.io/kubernetes/pkg/quota/v1/install"
 
 	kcpadmissioninitializers "github.com/kcp-dev/kcp/pkg/admission/initializers"
 	apisv1alpha1 "github.com/kcp-dev/kcp/pkg/apis/apis/v1alpha1"
@@ -67,6 +50,21 @@ import (
 	"github.com/kcp-dev/kcp/pkg/server/options/batteries"
 	"github.com/kcp-dev/kcp/pkg/server/requestinfo"
 	"github.com/kcp-dev/kcp/pkg/tunneler"
+	apiextensionsapiserver "k8s.io/apiextensions-apiserver/pkg/apiserver"
+	kcpapiextensionsclientset "k8s.io/apiextensions-apiserver/pkg/client/kcp/clientset/versioned"
+	kcpapiextensionsinformers "k8s.io/apiextensions-apiserver/pkg/client/kcp/informers/externalversions"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apiserver/pkg/admission"
+	"k8s.io/apiserver/pkg/endpoints/filters"
+	"k8s.io/apiserver/pkg/informerfactoryhack"
+	genericapiserver "k8s.io/apiserver/pkg/server"
+	serverstorage "k8s.io/apiserver/pkg/server/storage"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/kubernetes/pkg/genericcontrolplane"
+	"k8s.io/kubernetes/pkg/genericcontrolplane/aggregator"
+	"k8s.io/kubernetes/pkg/genericcontrolplane/apis"
 )
 
 type Config struct {
@@ -437,8 +435,8 @@ func NewConfig(opts kcpserveroptions.CompletedOptions) (*Config, error) {
 
 	// TODO(ncdc): find a way to support the default configuration. For now, don't use it, because it is difficult
 	// to get support for the special evaluators for pods/services/pvcs.
-	// quotaConfiguration := quotainstall.NewQuotaConfigurationForAdmission()
-	quotaConfiguration := generic.NewConfiguration(nil, quotainstall.DefaultIgnoredResources())
+	quotaConfiguration := kubequota.NewQuotaConfigurationForControllers(nil)
+	//quotaConfiguration := generic.NewConfiguration(nil, quotainstall.DefaultIgnoredResources())
 
 	c.ExtraConfig.quotaAdmissionStopCh = make(chan struct{})
 

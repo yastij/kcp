@@ -27,18 +27,22 @@ import (
 	kcpcorev1informers "github.com/kcp-dev/client-go/informers/core/v1"
 	kcpkubernetesclientset "github.com/kcp-dev/client-go/kubernetes"
 	"github.com/kcp-dev/logicalcluster/v3"
+	quota "k8s.io/apiserver/pkg/quota/v1"
 
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apiserver/pkg/quota/v1/generic"
+
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/component-base/metrics/prometheus/ratelimiter"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/controller"
 	"k8s.io/kubernetes/pkg/controller/resourcequota"
-	"k8s.io/kubernetes/pkg/quota/v1/install"
 
 	corev1alpha1 "github.com/kcp-dev/kcp/pkg/apis/core/v1alpha1"
 	corev1alpha1informers "github.com/kcp-dev/kcp/pkg/client/informers/externalversions/core/v1alpha1"
@@ -75,6 +79,7 @@ type Controller struct {
 
 	resourceQuotaClusterInformer        kcpcorev1informers.ResourceQuotaClusterInformer
 	scopingGenericSharedInformerFactory scopeableInformerFactory
+	kubeInformerFactory                 kcpkubernetesinformers.SharedInformerFactory
 
 	// For better testability
 	getLogicalCluster func(clusterName logicalcluster.Name) (*corev1alpha1.LogicalCluster, error)
@@ -107,7 +112,7 @@ func NewController(
 
 		scopingGenericSharedInformerFactory: dynamicDiscoverySharedInformerFactory,
 		resourceQuotaClusterInformer:        kubeInformerFactory.Core().V1().ResourceQuotas(),
-
+		kubeInformerFactory:                 kubeInformerFactory,
 		getLogicalCluster: func(clusterName logicalcluster.Name) (*corev1alpha1.LogicalCluster, error) {
 			return logicalClusterInformer.Lister().Cluster(clusterName).Get(corev1alpha1.LogicalClusterName)
 		},
@@ -250,12 +255,20 @@ func (c *Controller) process(ctx context.Context, key string) error {
 func (c *Controller) startQuotaForLogicalCluster(ctx context.Context, clusterName logicalcluster.Name) error {
 	logger := klog.FromContext(ctx)
 	resourceQuotaControllerClient := c.kubeClusterClient.Cluster(clusterName.Path())
-
 	// TODO(ncdc): find a way to support the default configuration. For now, don't use it, because it is difficult
 	// to get support for the special evaluators for pods/services/pvcs.
-	// listerFuncForResource := generic.ListerFuncForResourceFunc(scopedInformerFactory.ForResource)
-	// quotaConfiguration := install.NewQuotaConfigurationForControllers(listerFuncForResource)
-	quotaConfiguration := generic.NewConfiguration(nil, install.DefaultIgnoredResources())
+	listerFuncForResource := func(namespace string) ([]runtime.Object, error) {
+		deployments, err := c.kubeClusterClient.Cluster(clusterName.Path()).AppsV1().Deployments(namespace).List(ctx, v1.ListOptions{})
+		if err != nil {
+			return nil, err
+		}
+		objs := []runtime.Object{}
+		for _, deploy := range deployments.Items {
+			objs = append(objs, &deploy)
+		}
+		return objs, err
+	}
+	quotaConfiguration := NewQuotaConfigurationForControllers(listerFuncForResource)
 
 	resourceQuotaControllerOptions := &resourcequota.ControllerOptions{
 		QuotaClient:           resourceQuotaControllerClient.CoreV1(),
@@ -364,4 +377,31 @@ func (c *quotaController) processNextWorkItem(ctx context.Context) bool {
 	c.work(ctx)
 	c.queue.Forget(key)
 	return true
+}
+
+// NewQuotaConfigurationForControllers returns a quota configuration for controllers.
+func NewQuotaConfigurationForControllers(f generic.ListFuncByNamespace) quota.Configuration {
+	evaluators := NewEvaluators(f)
+	return generic.NewConfiguration(evaluators, DefaultIgnoredResources())
+}
+
+// ignoredResources are ignored by quota by default
+var ignoredResources = map[schema.GroupResource]struct{}{
+	// virtual resources that aren't stored and shouldn't be quota-ed
+	{Group: "", Resource: "bindings"}:                                      {},
+	{Group: "", Resource: "componentstatuses"}:                             {},
+	{Group: "authentication.k8s.io", Resource: "tokenreviews"}:             {},
+	{Group: "authorization.k8s.io", Resource: "subjectaccessreviews"}:      {},
+	{Group: "authorization.k8s.io", Resource: "selfsubjectaccessreviews"}:  {},
+	{Group: "authorization.k8s.io", Resource: "localsubjectaccessreviews"}: {},
+	{Group: "authorization.k8s.io", Resource: "selfsubjectrulesreviews"}:   {},
+
+	// events haven't been quota-ed before
+	{Group: "", Resource: "events"}: {},
+}
+
+// DefaultIgnoredResources returns the default set of resources that quota system
+// should ignore. This is exposed so downstream integrators can have access to them.
+func DefaultIgnoredResources() map[schema.GroupResource]struct{} {
+	return ignoredResources
 }
